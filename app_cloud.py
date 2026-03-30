@@ -11,18 +11,8 @@ from deep_translator import GoogleTranslator
 from concurrent.futures import ThreadPoolExecutor
 
 # --- 1. 核心配置 ---
-# --- 1. 核心配置 (环境自适应版) ---
-# 检测是否在本地运行（如果是本地，启用 7892 代理；如果是云端，自动跳过）
-if os.path.exists("D:\\vscode") or os.path.exists("D:\\code"):
-    os.environ['HTTP_PROXY'] = "http://127.0.0.1:7892"
-    os.environ['HTTPS_PROXY'] = "http://127.0.0.1:7892"
-    print("🛰️ 本地环境：已开启 7892 代理链路")
-else:
-    # 云端环境下清除所有代理设置
-    os.environ.pop('HTTP_PROXY', None)
-    os.environ.pop('HTTPS_PROXY', None)
-    print("☁️ 云端环境：已切换至原生全球链路")
-
+os.environ['HTTP_PROXY'] = "http://127.0.0.1:7892"
+os.environ['HTTPS_PROXY'] = "http://127.0.0.1:7892"
 DB_FILE = "stocks.json"
 
 st.set_page_config(page_title="全球战略情报终端 v8.0", layout="wide")

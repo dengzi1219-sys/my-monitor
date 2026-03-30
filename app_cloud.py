@@ -11,8 +11,8 @@ from deep_translator import GoogleTranslator
 from concurrent.futures import ThreadPoolExecutor
 
 # --- 1. 核心配置 ---
-os.environ['HTTP_PROXY'] = "http://127.0.0.1:7892"
-os.environ['HTTPS_PROXY'] = "http://127.0.0.1:7892"
+#os.environ['HTTP_PROXY'] = "http://127.0.0.1:7892"
+#os.environ['HTTPS_PROXY'] = "http://127.0.0.1:7892"
 DB_FILE = "stocks.json"
 
 st.set_page_config(page_title="全球战略情报终端 v8.0", layout="wide")

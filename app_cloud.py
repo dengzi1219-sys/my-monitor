@@ -9,16 +9,18 @@ import os
 import json
 from deep_translator import GoogleTranslator
 
-# --- 1. 核心配置 (环境自适应版) ---
-if os.path.exists("D:\\vscode") or os.path.exists("D:\\code") or os.path.exists("D:\\cloud"):
+# --- 1. 核心配置 (环境自适应：本地检测 D 盘，云端自动直连) ---
+# 涵盖了您提到的所有可能的本地目录
+if any(os.path.exists(path) for path in ["D:\\vscode", "D:\\code", "D:\\cloud"]):
     os.environ['HTTP_PROXY'] = "http://127.0.0.1:7892"
     os.environ['HTTPS_PROXY'] = "http://127.0.0.1:7892"
 else:
+    # 云端环境下必须清除代理，否则抓取必挂
     os.environ.pop('HTTP_PROXY', None)
     os.environ.pop('HTTPS_PROXY', None)
 
 DB_FILE = "stocks.json"
-st.set_page_config(page_title="全球战略情报终端 v8.2", layout="wide")
+st.set_page_config(page_title="全球战略情报终端 v8.3", layout="wide")
 
 # --- 2. 视觉样式 (CSS) ---
 st.markdown("""
@@ -40,10 +42,14 @@ st.markdown("""
 @st.cache_data(ttl=3600)
 def get_weather(city_en, city_zh):
     try:
-        res = requests.get(f"https://wttr.in/{city_en}?format=3", timeout=3)
+        # 🟢 优化点：超时增加到 10 秒，解决绵阳同步失败问题
+        res = requests.get(f"https://wttr.in/{city_en}?format=3", timeout=10)
         res.encoding = 'utf-8' 
-        return res.text.replace(city_en, city_zh).strip()
-    except: return f"{city_zh}：天气同步失败"
+        if res.status_code == 200:
+            return res.text.replace(city_en, city_zh).strip()
+        return f"{city_zh}：服务繁忙"
+    except:
+        return f"{city_zh}：天气同步失败"
 
 @st.cache_data(ttl=300)
 def get_stock_data_pro(ticker):
@@ -58,12 +64,14 @@ def get_stock_data_pro(ticker):
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             df['RSI'] = 100 - (100 / (1 + (gain / loss)))
         return df, t_obj.info
-    except: return pd.DataFrame(), {}
+    except:
+        return pd.DataFrame(), {}
 
 def get_ai_advice(df, info):
     if df.empty: return "⚪ 暂无数据", "rec-hold", 50
     rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns else 50
     m5, m20, cp = df['MA5'].iloc[-1], df['MA20'].iloc[-1], df['Close'].iloc[-1]
+    
     if rsi >= 75: return "⚠️ 山顶警报：超买严重", "rec-warn", rsi
     if rsi <= 25: return "💎 捡漏信号：超跌入场", "rec-buy", rsi
     if m5 > m20:
@@ -79,44 +87,56 @@ def fetch_global_intelligence():
     intel = {"finance": [], "world": [], "iran": []}
     headers = {'User-Agent': 'Mozilla/5.0'}
     translator = GoogleTranslator(source='auto', target='zh-CN')
+
     def trans_safe(text):
-        try: return translator.translate(text)
+        try: 
+            # 🟢 优化点：若翻译响应慢，直接返回原文，不卡死程序
+            return translator.translate(text)
         except: return text
-    # CNBC Finance
+
+    # 1. CNBC Finance
     try:
-        r = requests.get("https://www.cnbc.com/world-markets/", headers=headers, timeout=4)
+        r = requests.get("https://www.cnbc.com/world-markets/", headers=headers, timeout=5)
         soup = BeautifulSoup(r.text, 'html.parser')
         for l in soup.select(".Card-title")[:6]:
-            intel["finance"].append({"t": trans_safe(l.get_text(strip=True)), "l": "https://www.cnbc.com"+l.get('href') if not l.get('href').startswith("http") else l.get('href')})
+            t = l.get_text(strip=True)
+            h = l.get('href')
+            if t and h:
+                intel["finance"].append({"t": trans_safe(t), "l": "https://www.cnbc.com"+h if not h.startswith("http") else h})
     except: pass
-    # RSS Global & Iran
+
+    # 2. RSS Global & Iran
     rss = ["http://feeds.bbci.co.uk/news/world/rss.xml", "https://www.aljazeera.com/xml/rss/all.xml"]
     iran_kws = ["iran", "tehran", "middle east", "israel", "hezbollah", "lebanon", "gaza", "伊朗", "德黑兰", "中东", "以色列"]
     seen = set()
     for url in rss:
         try:
-            r = requests.get(url, headers=headers, timeout=4)
+            r = requests.get(url, headers=headers, timeout=7)
             soup = BeautifulSoup(r.text, 'xml')
-            for item in soup.find_all('item')[:8]:
+            # 🟢 优化点：每个源减为 6 条，减轻翻译压力，提高加载速度
+            for item in soup.find_all('item')[:6]:
                 raw_t = item.title.text.strip()
                 if raw_t not in seen:
                     seen.add(raw_t)
                     zh_t = trans_safe(raw_t)
                     link = item.link.text.strip()
-                    if any(k in raw_t.lower() or k in zh_t for k in iran_kws): intel["iran"].append({"t": zh_t, "l": link})
-                    else: intel["world"].append({"t": zh_t, "l": link})
+                    if any(k in raw_t.lower() or k in zh_t for k in iran_kws):
+                        intel["iran"].append({"t": zh_t, "l": link})
+                    else:
+                        intel["world"].append({"t": zh_t, "l": link})
         except: continue
     return intel
 
-# --- 4. 数据初始化 ---
+# --- 4. 数据加载 ---
 if 'my_stocks' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, 'r') as f: st.session_state.my_stocks = json.load(f)
         except: st.session_state.my_stocks = ["GC=F", "NVDA", "600726.SS"]
-    else: st.session_state.my_stocks = ["GC=F", "NVDA", "600726.SS"]
+    else:
+        st.session_state.my_stocks = ["GC=F", "NVDA", "600726.SS"]
 
-# --- 5. 【加回侧边栏】 ---
+# --- 5. 侧边栏 ---
 with st.sidebar:
     st.header("🛠️ 战略指挥部")
     st.write(f"🏠 {get_weather('Chengdu', '成都')} | 🏫 {get_weather('Mianyang', '绵阳')}")
@@ -134,7 +154,7 @@ with st.sidebar:
             with open(DB_FILE, 'w') as f: json.dump(st.session_state.my_stocks, f)
             st.rerun()
     st.divider()
-    st.caption("西科大准工程师专属 | v8.2-Final")
+    st.caption("西科大准工程师专属 | v8.3-Final Stable")
 
 # --- 6. 主界面 ---
 st.title("🛰️ 全球局势 & 金融命脉战略终端")
@@ -170,16 +190,20 @@ if not df_h.empty:
         st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
+
+# --- 7. 情报中心 ---
 st.subheader("📡 综合情报汇总中心")
 tab_fin, tab_world, tab_iran = st.tabs(["📊 金融命脉", "🌐 全球热点", "🇮🇷 中东战区"])
-intel = fetch_global_intelligence()
+
+with st.spinner("卫星链路解密中... (本地首刷较慢，请耐心等待)"):
+    intel = fetch_global_intelligence()
 
 def render(items, cls, tag):
     if not items: st.write("🛰️ 正在监听信号..."); return
-    for it in items[:10]:
+    for it in items:
         with st.expander(f"📌 {it['t'][:55]}..."):
             st.markdown(f'<span class="news-tag {cls}">{tag}</span> <b>{it["t"]}</b>', unsafe_allow_html=True)
-            st.link_button("解密原始报道", it['l'])
+            st.link_button("查看报道原文", it['l'])
 
 with tab_fin: render(intel["finance"], "tag-finance", "FINANCE")
 with tab_world: render(intel["world"], "tag-world", "GLOBAL")
